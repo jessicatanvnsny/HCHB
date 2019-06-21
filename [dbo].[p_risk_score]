@@ -1,0 +1,3077 @@
+/*    ==Scripting Parameters==
+
+    Source Server Version : SQL Server 2014 (12.0.5553)
+    Source Database Engine Edition : Microsoft SQL Server Standard Edition
+    Source Database Engine Type : Standalone SQL Server
+
+    Target Server Version : SQL Server 2014
+    Target Database Engine Edition : Microsoft SQL Server Standard Edition
+    Target Database Engine Type : Standalone SQL Server
+*/
+
+USE [VNSNY_STAT]
+GO
+
+/****** Object:  StoredProcedure [dbo].[p_risk_score]    Script Date: 6/21/2019 10:35:09 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- =============================================
+-- Author:		<Jessica>
+-- Create date: <2018-04-12>
+-- Description:	<risk model for hospitalization, bp3 identification, bp3 hospitalization >
+-- =============================================
+CREATE  PROCEDURE [dbo].[p_risk_score]
+	-- Add the parameters for the stored procedure here
+	@Param1 int = 7,
+	@Param2 INT = 2684
+AS
+BEGIN 
+ 	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+
+    -- Insert statements for procedure here	  
+	DECLARE
+	@iErrorCode int ,
+    @hosphigh float,
+	@hosplow float,
+	@bp3hosphigh float,
+	@bp3hosplow float,
+	@bp3identf float
+
+	   set @hosphigh   = (select high from dbo.lu_risk_level_range where lrlr_lrlid = 25102)
+       set @hosplow    = (select low  from dbo.lu_risk_level_range where lrlr_lrlid = 25102)
+	   set @bp3hosphigh= (select high from dbo.lu_risk_level_range where lrlr_lrlid = 25202)
+       set @bp3hosplow = (select low  from dbo.lu_risk_level_range where lrlr_lrlid = 25202)
+	   set @bp3identf  = (select low  from dbo.lu_risk_level_range where lrlr_lrlid = 25301)
+
+	IF OBJECT_ID('tempdb..#risk_score') IS NOT NULL DROP TABLE #risk_score
+	CREATE TABLE #risk_score (rs_epiid int,rs_ceo_cevid int,rs_cfcevid INT,rs_astrsn int
+	                       -- ,ceo_insertdate date,ceo_lastupdate date
+							)
+
+   
+        ;with newest_date ( nceoa_id,nceoa_ceoid,newest_date) as(
+        select   ceoa_id
+                ,ceoa_ceoid,
+		    case when  ceoa_insertdate > ar_datemodified
+		         then ceoa_insertdate
+			     when ceoa_insertdate < ar_datemodified
+		    	 then ar_datemodified
+		    	 when ar_datemodified is null
+			     then ceoa_insertdate
+	         end as newest_date
+         from HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS 
+ 　　　　　 　left join HCHB.dbo.AUDITREPORT_CLIENT_EPISODE_OASIS_ANSWERS
+               on ar_ceoa_id = ceoa_id and
+			      ar_ceoa_ceoid = ceoa_ceoid 
+           )
+    insert into #risk_score (rs_epiid,rs_ceo_cevid,rs_cfcevid,rs_astrsn)
+       select ceo_epiid,ceo_cevid, 
+	          LAG (ceo_cevid, 1, 0) OVER (partition by ceo_epiid order by CEV_VISITDATE ) AS rs_cfcevid,
+			  cast(ceoa_OASISAnswer as int) as  rs_astrsn 
+       from newest_date 
+        join HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS
+           on nceoa_id = ceoa_id and nceoa_ceoid = ceoa_ceoid
+	    join HCHB.dbo.CLIENT_EPISODE_OASIS 
+	       on ceo_id = ceoa_ceoid
+		join HCHB.dbo.CLIENT_EPISODE_VISITS 
+		   on cev_id=ceo_cevid
+	    join SHARED_REFERENCE.oasis.OASIS_MOS 
+	       on ceoa_omid=om_id
+       where om_monumber='M0100' AND ceoa_OASISAnswer IN ('01','03','09')
+           and  DATEDIFF(day,newest_date, getdate()) < @Param1
+/*		 union
+	   select  ceo_epiid 
+			 , ceo_cevid
+			 ,LAG (ceo_cevid, 1, 0) OVER (partition by ceo_epiid order by CEV_VISITDATE ) AS rs_cfcevid
+			 , cast(ceoa_OASISAnswer as int) as  rs_astrsn 
+			-- , ceo_insertdate 
+			-- , ceo_lastupdate
+			-- , DATEDIFF(DAY, convert(date, ceo_lastupdate), convert(date, GETDATE())) as time_flag
+       from HCHB.dbo.client_episode_oasis 
+           join  HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS on ceo_id = ceoa_ceoid
+		   join HCHB.dbo.CLIENT_EPISODE_VISITS on cev_id=ceo_cevid
+           join SHARED_REFERENCE.oasis.OASIS_MOS on ceoa_omid=om_id
+       where om_monumber='M0100' AND cast(ceoa_OASISAnswer as int) IN (1,3,9)
+             and (DATEDIFF(DAY, convert(date, ceo_lastupdate), convert(date, GETDATE())) < 100
+		         or DATEDIFF(DAY, convert(date, ceo_insertdate), convert(date, GETDATE())) < 100)
+*/
+	   union
+	   select  ceo_epiid 
+			 , ceo_cevid
+			 , LAG (ceo_cevid, 1, 0) OVER (partition by ceo_epiid order by CEV_VISITDATE ) AS rs_cfcevid
+			 , cast(ceoa_OASISAnswer as int) as  rs_astrsn 
+			-- , ceo_insertdate 
+			-- , ceo_lastupdate
+			-- , DATEDIFF(DAY, convert(date, ceo_lastupdate), convert(date, GETDATE())) as time_flag
+	   from HCHB.dbo.client_episode_oasis 
+           join  HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS on ceo_id = ceoa_ceoid
+		   join HCHB.dbo.CLIENT_EPISODE_VISITS on cev_id=ceo_cevid
+           join SHARED_REFERENCE.oasis.OASIS_MOS on ceoa_omid=om_id
+       where om_monumber='M0100' AND ceoa_OASISAnswer IN ('01','03','09')
+	         and (ceo_epiid  not in (select rsh_epiid from dbo.risk_score_history)
+		  	       or ceo_cevid  not in (select rsh_ceo_cevid from dbo.risk_score_history))
+
+
+
+     
+DECLARE @RISK_SCORE_X TABLE
+(
+	RS_EPIID INT, RS_CEO_CEVID INT, RS_ASTRSN INT, FACTOR_ID VARCHAR(50), PARAMETER VARCHAR(50),RESP_NUM INT, RESP_VAL INT
+);
+DECLARE @RS_EPIID AS INT, @pRS_CEO_CEVID AS INT, @RS_ASTRSN AS INT, @FACTOR_ID AS VARCHAR(50),@PARAMETER AS VARCHAR(50), @RESP_NUM AS INT,@RESP_VAL AS INT;
+
+DECLARE C CURSOR FAST_FORWARD /* read only, forward only */
+FOR    			
+            select rs_epiid , rs_ceo_cevid, rs_astrsn, factor_id, parameter, resp_num, resp_val
+			FROM (
+			select aa.*
+					, ROW_NUMBER ()   OVER (partition by rs_ceo_cevid, parameter order by cf_priority ) AS srt_cf_priority -- add this field
+			from (
+				SELECT rs_epiid , rs_ceo_cevid, rs_astrsn
+								,'INTERCEPT' as factor_id
+								, 'INTERCEPT' as parameter
+								, 1 as resp_num
+								, 1 as resp_val
+					, 1 as cf_priority
+				FROM  #risk_score
+       UNION --==================================== OASIS Items  ========================================================================
+       select rs_epiid,rs_ceo_cevid, rs_astrsn,
+              om_formlocation as factor,
+                     case when  om_monumber in ('M1311') then om_formlocation -- continuous
+                           else  concat(om_formlocation, factor_level)  -- factor
+                     end as parameter
+              , factor_level
+              , resp_val  
+              , 1 as cf_priority
+       from ( 
+       SELECT  rs_epiid, rs_ceo_cevid, rs_astrsn, om_monumber, ceo_epiid, ceo_id, om_formlocation, ceoa.ceoa_OASISAnswer, -- om_type, om_atype, 
+                           case 
+                                  when ceoa.ceoa_OASISAnswer in ('^') then                                  
+                                         (caSE 
+                                               when  om_monumber in ('M1311') then 0 
+                                               when  om_monumber in ('M1021', 'M1023') then 0
+                                          else 1 END)
+                                  --when ceoa_OASISAnswer not in ('UK', 'NA', '^') then ISNULL(cast(ceoa_OASISAnswer as int),0)                              
+                                  when ceoa.ceoa_OASISAnswer in ('UK') then -1 
+                                  when ceoa.ceoa_OASISAnswer in ('NA') then -2
+                                  when om_type in (3, 4) AND  ISNUMERIC (ceoa_OASISAnswer) = 1  and om_atype is NULL then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+								  when om_monumber in ('M1100', 'M0110', 'M0080', 'M0069') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  when om_formlocation IN ('M1021_PRIMARY_DIAG_SEVERITY', 'M1023_OTH_DIAG1_SEVERITY', 'M1023_OTH_DIAG2_SEVERITY', 'M1023_OTH_DIAG3_SEVERITY', 'M1023_OTH_DIAG4_SEVERITY', 'M1023_OTH_DIAG5_SEVERITY') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  else 0
+                           end as factor_level
+                           , case 
+                                         when ceoa.ceoa_OASISAnswer in ('^') then                                           
+										  (case 
+                                                when  om_monumber in ('M1311') then 0 
+                                                when  om_monumber in ('M1021', 'M1023') then 0
+                                           else 1 END)
+                                         when ceoa.ceoa_OASISAnswer in ('UK') then 1
+                                         when ceoa.ceoa_OASISAnswer in ('NA') then 1
+                                         when om.om_monumber in ('M1311') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0)
+                                         when om_type in (4) and om_atype is NULL then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0)  -- Ordinal and mark all that apply
+                                         when om_type in (3) and om_atype is NULL then 1 -- Ordinal and mark all that apply
+                                  -- when om_formlocation IN ('M1021_PRIMARY_DIAG_SEVERITY', 'M1023_OTH_DIAG1_SEVERITY', 'M1023_OTH_DIAG2_SEVERITY', 'M1023_OTH_DIAG3_SEVERITY', 'M1023_OTH_DIAG4_SEVERITY', 'M1023_OTH_DIAG5_SEVERITY') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  else 1
+                           end as resp_val
+       from #risk_score
+                     join HCHB.dbo.CLIENT_EPISODE_OASIS ceo on rs_ceo_cevid = ceo_cevid
+                     join HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS ceoa on (ceo.ceo_id = ceoa.ceoa_ceoid) 
+                     join SHARED_REFERENCE.oasis.OASIS_MOS om on ceoa_omid=om_id 
+       where SUBSTRING(om_formlocation, 1, 11) <> 'ITEM_FILLER'
+              -- and substring(om_formlocation, 1, 5) in ('M0140', 'M1845')
+              -- order by om_formlocation
+                     ) prex
+       --order by om_formlocation
+       UNION --==================================== OASIS Items CF  ========================================================================
+       select rs_epiid,rs_ceo_cevid, rs_astrsn,
+              om_formlocation as factor,
+                     case when  om_monumber in ('M1311') then om_formlocation -- continuous
+                           else  concat(om_formlocation, factor_level)  -- factor
+                     end as parameter
+              , factor_level
+              , resp_val  
+              , 2 as cf_priority
+       from ( 
+SELECT  rs_epiid, rs_ceo_cevid, rs_astrsn, om_monumber, ceo_epiid, ceo_id, om_formlocation, ceoa.ceoa_OASISAnswer, -- om_type, om_atype, 
+                           case 
+                                  when ceoa.ceoa_OASISAnswer in ('^') then 
+								         (caSE 
+                                               when  om_monumber in ('M1311') then 0 
+                                               when  om_monumber in ('M1021', 'M1023') then 0
+                                          else 1 END)                           
+                                  --when ceoa_OASISAnswer not in ('UK', 'NA', '^') then ISNULL(cast(ceoa_OASISAnswer as int),0)                              
+                                  when ceoa.ceoa_OASISAnswer in ('UK') then -1 
+                                  when ceoa.ceoa_OASISAnswer in ('NA') then -2
+                                  when om_type in (3, 4) AND  ISNUMERIC (ceoa_OASISAnswer) = 1   and om_atype is NULL then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+								  when om_monumber in ('M1100', 'M0110', 'M0080', 'M0069') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  when om_formlocation IN ('M1021_PRIMARY_DIAG_SEVERITY', 'M1023_OTH_DIAG1_SEVERITY', 'M1023_OTH_DIAG2_SEVERITY', 'M1023_OTH_DIAG3_SEVERITY', 'M1023_OTH_DIAG4_SEVERITY', 'M1023_OTH_DIAG5_SEVERITY') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  else 0
+                           end as factor_level
+                           , case 
+                                         when ceoa.ceoa_OASISAnswer in ('^') then 
+										 (case
+                                               when  om_monumber in ('M1311') then 0 
+                                               when  om_monumber in ('M1021', 'M1023') then 0
+                                          else 1 END) 
+                                         when ceoa.ceoa_OASISAnswer in ('UK') then 1
+                                         when ceoa.ceoa_OASISAnswer in ('NA') then 1
+                                         when om.om_monumber in ('M1311') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0)
+                                         when om_type in (4) and om_atype is NULL then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0)  -- Ordinal and mark all that apply
+                                         when om_type in (3) and om_atype is NULL then 1 -- Ordinal and mark all that apply
+                                  -- when om_formlocation IN ('M1021_PRIMARY_DIAG_SEVERITY', 'M1023_OTH_DIAG1_SEVERITY', 'M1023_OTH_DIAG2_SEVERITY', 'M1023_OTH_DIAG3_SEVERITY', 'M1023_OTH_DIAG4_SEVERITY', 'M1023_OTH_DIAG5_SEVERITY') then ISNULL(cast(ceoa.ceoa_OASISAnswer as int),0) 
+                                  else 1
+                           end as resp_val
+       from #risk_score -- VNSNY_STAT_DEV.dbo.risk_score
+                     join HCHB.dbo.CLIENT_EPISODE_OASIS ceo on rs_cfcevid = ceo_cevid
+                     join HCHB.dbo.CLIENT_EPISODE_OASIS_ANSWERS ceoa on (ceo.ceo_id = ceoa.ceoa_ceoid) 
+                     join SHARED_REFERENCE.oasis.OASIS_MOS om on ceoa_omid=om_id 
+       where SUBSTRING(om_formlocation, 1, 11) <> 'ITEM_FILLER'
+                     and rs_cfcevid <> 0 -- just to elminate extras
+                     ) prex
+
+				UNION --====================== DIAGNOSIS   =======================================================================
+				select rs_epiid,ceo_cevid,rs_astrsn, factor, factor as parameter, MAX(RESP_VAL) AS factor_level, MAX(RESP_VAL) AS RESP_VAL, MAX(2) AS cf_priority
+				FROM (
+					SELECT  rs_epiid,ceo_cevid,rs_astrsn
+							, 
+						CASE  
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A04' then 'DXX_A04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A09' then 'DXX_A09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A31' then 'DXX_A31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A40' then 'DXX_A40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A41' then 'DXX_A41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A49' then 'DXX_A49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A69' then 'DXX_A69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B00' then 'DXX_B00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B02' then 'DXX_B02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B18' then 'DXX_B18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B19' then 'DXX_B19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B20' then 'DXX_B20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B25' then 'DXX_B25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B34' then 'DXX_B34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B35' then 'DXX_B35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B37' then 'DXX_B37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B95' then 'DXX_B95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B96' then 'DXX_B96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B97' then 'DXX_B97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C02' then 'DXX_C02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C06' then 'DXX_C06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C09' then 'DXX_C09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C10' then 'DXX_C10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C11' then 'DXX_C11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C15' then 'DXX_C15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C16' then 'DXX_C16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C17' then 'DXX_C17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C18' then 'DXX_C18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C19' then 'DXX_C19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C20' then 'DXX_C20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C21' then 'DXX_C21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C22' then 'DXX_C22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C23' then 'DXX_C23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C24' then 'DXX_C24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C25' then 'DXX_C25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C32' then 'DXX_C32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C34' then 'DXX_C34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C40' then 'DXX_C40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C41' then 'DXX_C41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C43' then 'DXX_C43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C44' then 'DXX_C44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C45' then 'DXX_C45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C48' then 'DXX_C48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C49' then 'DXX_C49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C50' then 'DXX_C50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C51' then 'DXX_C51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C53' then 'DXX_C53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C54' then 'DXX_C54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C55' then 'DXX_C55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C56' then 'DXX_C56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C57' then 'DXX_C57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C61' then 'DXX_C61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C64' then 'DXX_C64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C67' then 'DXX_C67'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C71' then 'DXX_C71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C73' then 'DXX_C73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C76' then 'DXX_C76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C77' then 'DXX_C77'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C78' then 'DXX_C78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C79' then 'DXX_C79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C7A' then 'DXX_C7A'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C80' then 'DXX_C80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C81' then 'DXX_C81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C83' then 'DXX_C83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C84' then 'DXX_C84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C85' then 'DXX_C85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C88' then 'DXX_C88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C90' then 'DXX_C90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C91' then 'DXX_C91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C92' then 'DXX_C92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C95' then 'DXX_C95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D05' then 'DXX_D05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D07' then 'DXX_D07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D12' then 'DXX_D12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D25' then 'DXX_D25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D29' then 'DXX_D29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D32' then 'DXX_D32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D33' then 'DXX_D33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D35' then 'DXX_D35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D37' then 'DXX_D37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D43' then 'DXX_D43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D46' then 'DXX_D46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D47' then 'DXX_D47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D48' then 'DXX_D48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D49' then 'DXX_D49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D50' then 'DXX_D50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D51' then 'DXX_D51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D53' then 'DXX_D53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D56' then 'DXX_D56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D57' then 'DXX_D57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D59' then 'DXX_D59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D61' then 'DXX_D61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D62' then 'DXX_D62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D63' then 'DXX_D63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D64' then 'DXX_D64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D68' then 'DXX_D68'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D69' then 'DXX_D69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D70' then 'DXX_D70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D72' then 'DXX_D72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D75' then 'DXX_D75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D86' then 'DXX_D86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D89' then 'DXX_D89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E03' then 'DXX_E03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E04' then 'DXX_E04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E05' then 'DXX_E05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E06' then 'DXX_E06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E07' then 'DXX_E07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E08' then 'DXX_E08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E09' then 'DXX_E09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E10' then 'DXX_E10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E11' then 'DXX_E11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E13' then 'DXX_E13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E16' then 'DXX_E16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E21' then 'DXX_E21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E23' then 'DXX_E23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E27' then 'DXX_E27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E43' then 'DXX_E43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E44' then 'DXX_E44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E46' then 'DXX_E46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E53' then 'DXX_E53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E55' then 'DXX_E55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E56' then 'DXX_E56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E66' then 'DXX_E66'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E78' then 'DXX_E78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E80' then 'DXX_E80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E83' then 'DXX_E83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E85' then 'DXX_E85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E86' then 'DXX_E86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E87' then 'DXX_E87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E88' then 'DXX_E88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E89' then 'DXX_E89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F01' then 'DXX_F01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F02' then 'DXX_F02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F03' then 'DXX_F03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F05' then 'DXX_F05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F06' then 'DXX_F06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F10' then 'DXX_F10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F11' then 'DXX_F11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F14' then 'DXX_F14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F17' then 'DXX_F17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F19' then 'DXX_F19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F20' then 'DXX_F20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F22' then 'DXX_F22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F25' then 'DXX_F25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F29' then 'DXX_F29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F31' then 'DXX_F31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F32' then 'DXX_F32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F33' then 'DXX_F33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F34' then 'DXX_F34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F39' then 'DXX_F39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F40' then 'DXX_F40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F41' then 'DXX_F41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F43' then 'DXX_F43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F44' then 'DXX_F44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F60' then 'DXX_F60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F64' then 'DXX_F64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F79' then 'DXX_F79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F80' then 'DXX_F80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F84' then 'DXX_F84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F90' then 'DXX_F90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G04' then 'DXX_G04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G06' then 'DXX_G06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G12' then 'DXX_G12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G20' then 'DXX_G20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G23' then 'DXX_G23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G24' then 'DXX_G24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G25' then 'DXX_G25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G30' then 'DXX_G30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G31' then 'DXX_G31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G35' then 'DXX_G35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G37' then 'DXX_G37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G40' then 'DXX_G40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G43' then 'DXX_G43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G45' then 'DXX_G45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G46' then 'DXX_G46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G47' then 'DXX_G47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G50' then 'DXX_G50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G51' then 'DXX_G51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G56' then 'DXX_G56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G57' then 'DXX_G57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G60' then 'DXX_G60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G61' then 'DXX_G61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G62' then 'DXX_G62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G70' then 'DXX_G70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G71' then 'DXX_G71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G72' then 'DXX_G72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G80' then 'DXX_G80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G81' then 'DXX_G81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G82' then 'DXX_G82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G83' then 'DXX_G83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G89' then 'DXX_G89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G90' then 'DXX_G90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G91' then 'DXX_G91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G93' then 'DXX_G93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G95' then 'DXX_G95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H25' then 'DXX_H25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H26' then 'DXX_H26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H35' then 'DXX_H35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H40' then 'DXX_H40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H53' then 'DXX_H53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H54' then 'DXX_H54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H81' then 'DXX_H81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H90' then 'DXX_H90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H91' then 'DXX_H91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I05' then 'DXX_I05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I06' then 'DXX_I06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I07' then 'DXX_I07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I08' then 'DXX_I08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I09' then 'DXX_I09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I10' then 'DXX_I10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I11' then 'DXX_I11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I12' then 'DXX_I12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I13' then 'DXX_I13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I15' then 'DXX_I15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I16' then 'DXX_I16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I20' then 'DXX_I20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I21' then 'DXX_I21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I22' then 'DXX_I22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I24' then 'DXX_I24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I25' then 'DXX_I25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I26' then 'DXX_I26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I27' then 'DXX_I27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I31' then 'DXX_I31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I33' then 'DXX_I33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I34' then 'DXX_I34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I35' then 'DXX_I35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I36' then 'DXX_I36'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I38' then 'DXX_I38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I42' then 'DXX_I42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I44' then 'DXX_I44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I45' then 'DXX_I45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I46' then 'DXX_I46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I47' then 'DXX_I47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I48' then 'DXX_I48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I49' then 'DXX_I49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I50' then 'DXX_I50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I51' then 'DXX_I51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I60' then 'DXX_I60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I61' then 'DXX_I61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I62' then 'DXX_I62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I63' then 'DXX_I63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I65' then 'DXX_I65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I67' then 'DXX_I67'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I69' then 'DXX_I69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I70' then 'DXX_I70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I71' then 'DXX_I71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I72' then 'DXX_I72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I73' then 'DXX_I73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I74' then 'DXX_I74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I77' then 'DXX_I77'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I80' then 'DXX_I80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I82' then 'DXX_I82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I83' then 'DXX_I83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I85' then 'DXX_I85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I87' then 'DXX_I87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I89' then 'DXX_I89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I95' then 'DXX_I95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I96' then 'DXX_I96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I97' then 'DXX_I97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I99' then 'DXX_I99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J06' then 'DXX_J06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J09' then 'DXX_J09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J10' then 'DXX_J10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J11' then 'DXX_J11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J12' then 'DXX_J12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J15' then 'DXX_J15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J18' then 'DXX_J18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J20' then 'DXX_J20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J30' then 'DXX_J30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J38' then 'DXX_J38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J39' then 'DXX_J39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J40' then 'DXX_J40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J42' then 'DXX_J42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J43' then 'DXX_J43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J44' then 'DXX_J44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J45' then 'DXX_J45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J47' then 'DXX_J47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J69' then 'DXX_J69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J80' then 'DXX_J80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J81' then 'DXX_J81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J84' then 'DXX_J84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J86' then 'DXX_J86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J90' then 'DXX_J90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J91' then 'DXX_J91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J93' then 'DXX_J93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J94' then 'DXX_J94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J95' then 'DXX_J95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J96' then 'DXX_J96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J98' then 'DXX_J98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K11' then 'DXX_K11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K20' then 'DXX_K20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K21' then 'DXX_K21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K22' then 'DXX_K22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K25' then 'DXX_K25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K26' then 'DXX_K26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K27' then 'DXX_K27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K29' then 'DXX_K29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K31' then 'DXX_K31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K35' then 'DXX_K35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K40' then 'DXX_K40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K42' then 'DXX_K42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K43' then 'DXX_K43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K44' then 'DXX_K44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K46' then 'DXX_K46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K50' then 'DXX_K50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K51' then 'DXX_K51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K52' then 'DXX_K52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K55' then 'DXX_K55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K56' then 'DXX_K56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K57' then 'DXX_K57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K58' then 'DXX_K58'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K59' then 'DXX_K59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K60' then 'DXX_K60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K61' then 'DXX_K61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K62' then 'DXX_K62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K63' then 'DXX_K63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K64' then 'DXX_K64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K65' then 'DXX_K65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K66' then 'DXX_K66'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K70' then 'DXX_K70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K72' then 'DXX_K72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K74' then 'DXX_K74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K75' then 'DXX_K75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K76' then 'DXX_K76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K80' then 'DXX_K80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K81' then 'DXX_K81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K82' then 'DXX_K82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K83' then 'DXX_K83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K85' then 'DXX_K85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K86' then 'DXX_K86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K90' then 'DXX_K90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K91' then 'DXX_K91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K92' then 'DXX_K92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K94' then 'DXX_K94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L02' then 'DXX_L02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L03' then 'DXX_L03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L05' then 'DXX_L05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L08' then 'DXX_L08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L12' then 'DXX_L12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L29' then 'DXX_L29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L30' then 'DXX_L30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L40' then 'DXX_L40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L72' then 'DXX_L72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L73' then 'DXX_L73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L76' then 'DXX_L76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L89' then 'DXX_L89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L97' then 'DXX_L97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L98' then 'DXX_L98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M00' then 'DXX_M00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M05' then 'DXX_M05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M06' then 'DXX_M06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M10' then 'DXX_M10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M12' then 'DXX_M12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M13' then 'DXX_M13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M15' then 'DXX_M15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M16' then 'DXX_M16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M17' then 'DXX_M17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M19' then 'DXX_M19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M1A' then 'DXX_M1A'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M20' then 'DXX_M20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M21' then 'DXX_M21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M24' then 'DXX_M24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M25' then 'DXX_M25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M31' then 'DXX_M31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M32' then 'DXX_M32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M34' then 'DXX_M34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M35' then 'DXX_M35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M40' then 'DXX_M40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M41' then 'DXX_M41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M43' then 'DXX_M43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M45' then 'DXX_M45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M46' then 'DXX_M46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M47' then 'DXX_M47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M48' then 'DXX_M48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M50' then 'DXX_M50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M51' then 'DXX_M51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M53' then 'DXX_M53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M54' then 'DXX_M54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M62' then 'DXX_M62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M65' then 'DXX_M65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M70' then 'DXX_M70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M71' then 'DXX_M71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M72' then 'DXX_M72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M75' then 'DXX_M75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M76' then 'DXX_M76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M79' then 'DXX_M79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M80' then 'DXX_M80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M81' then 'DXX_M81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M84' then 'DXX_M84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M85' then 'DXX_M85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M86' then 'DXX_M86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M87' then 'DXX_M87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M89' then 'DXX_M89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M96' then 'DXX_M96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M97' then 'DXX_M97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M99' then 'DXX_M99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N10' then 'DXX_N10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N12' then 'DXX_N12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N13' then 'DXX_N13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N17' then 'DXX_N17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N18' then 'DXX_N18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N19' then 'DXX_N19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N20' then 'DXX_N20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N25' then 'DXX_N25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N28' then 'DXX_N28'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N30' then 'DXX_N30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N31' then 'DXX_N31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N32' then 'DXX_N32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N39' then 'DXX_N39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N40' then 'DXX_N40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N41' then 'DXX_N41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N42' then 'DXX_N42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N49' then 'DXX_N49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N50' then 'DXX_N50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N61' then 'DXX_N61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N63' then 'DXX_N63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N64' then 'DXX_N64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N73' then 'DXX_N73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N81' then 'DXX_N81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N82' then 'DXX_N82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N83' then 'DXX_N83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N85' then 'DXX_N85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N93' then 'DXX_N93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N99' then 'DXX_N99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O86' then 'DXX_O86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O90' then 'DXX_O90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q05' then 'DXX_Q05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q21' then 'DXX_Q21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q23' then 'DXX_Q23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q61' then 'DXX_Q61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q90' then 'DXX_Q90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R00' then 'DXX_R00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R01' then 'DXX_R01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R03' then 'DXX_R03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R04' then 'DXX_R04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R05' then 'DXX_R05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R06' then 'DXX_R06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R07' then 'DXX_R07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R09' then 'DXX_R09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R10' then 'DXX_R10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R11' then 'DXX_R11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R13' then 'DXX_R13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R15' then 'DXX_R15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R16' then 'DXX_R16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R17' then 'DXX_R17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R18' then 'DXX_R18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R19' then 'DXX_R19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R20' then 'DXX_R20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R21' then 'DXX_R21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R22' then 'DXX_R22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R23' then 'DXX_R23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R25' then 'DXX_R25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R26' then 'DXX_R26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R27' then 'DXX_R27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R29' then 'DXX_R29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R30' then 'DXX_R30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R31' then 'DXX_R31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R32' then 'DXX_R32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R33' then 'DXX_R33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R35' then 'DXX_R35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R39' then 'DXX_R39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R41' then 'DXX_R41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R42' then 'DXX_R42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R44' then 'DXX_R44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R45' then 'DXX_R45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R47' then 'DXX_R47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R50' then 'DXX_R50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R51' then 'DXX_R51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R52' then 'DXX_R52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R53' then 'DXX_R53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R54' then 'DXX_R54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R55' then 'DXX_R55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R56' then 'DXX_R56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R57' then 'DXX_R57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R59' then 'DXX_R59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R60' then 'DXX_R60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R62' then 'DXX_R62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R63' then 'DXX_R63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R65' then 'DXX_R65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R73' then 'DXX_R73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R74' then 'DXX_R74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R76' then 'DXX_R76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R78' then 'DXX_R78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R79' then 'DXX_R79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R91' then 'DXX_R91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R93' then 'DXX_R93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R94' then 'DXX_R94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S00' then 'DXX_S00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S01' then 'DXX_S01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S02' then 'DXX_S02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S06' then 'DXX_S06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S09' then 'DXX_S09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S12' then 'DXX_S12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S14' then 'DXX_S14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S20' then 'DXX_S20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S21' then 'DXX_S21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S22' then 'DXX_S22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S30' then 'DXX_S30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S31' then 'DXX_S31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S32' then 'DXX_S32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S36' then 'DXX_S36'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S37' then 'DXX_S37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S39' then 'DXX_S39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S40' then 'DXX_S40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S41' then 'DXX_S41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S42' then 'DXX_S42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S43' then 'DXX_S43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S46' then 'DXX_S46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S49' then 'DXX_S49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S50' then 'DXX_S50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S51' then 'DXX_S51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S52' then 'DXX_S52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S59' then 'DXX_S59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S60' then 'DXX_S60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S61' then 'DXX_S61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S62' then 'DXX_S62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S70' then 'DXX_S70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S71' then 'DXX_S71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S72' then 'DXX_S72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S73' then 'DXX_S73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S76' then 'DXX_S76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S80' then 'DXX_S80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S81' then 'DXX_S81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S82' then 'DXX_S82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S83' then 'DXX_S83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S86' then 'DXX_S86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S88' then 'DXX_S88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S89' then 'DXX_S89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S90' then 'DXX_S90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S91' then 'DXX_S91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S92' then 'DXX_S92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S93' then 'DXX_S93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S98' then 'DXX_S98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S99' then 'DXX_S99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T14' then 'DXX_T14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T20' then 'DXX_T20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T21' then 'DXX_T21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T22' then 'DXX_T22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T23' then 'DXX_T23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T24' then 'DXX_T24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T25' then 'DXX_T25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T38' then 'DXX_T38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T45' then 'DXX_T45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T78' then 'DXX_T78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T79' then 'DXX_T79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T80' then 'DXX_T80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T81' then 'DXX_T81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T82' then 'DXX_T82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T83' then 'DXX_T83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T84' then 'DXX_T84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T85' then 'DXX_T85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T86' then 'DXX_T86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T87' then 'DXX_T87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z21' then 'DXX_Z21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z42' then 'DXX_Z42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z43' then 'DXX_Z43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z45' then 'DXX_Z45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z46' then 'DXX_Z46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z47' then 'DXX_Z47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z48' then 'DXX_Z48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z60' then 'DXX_Z60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z68' then 'DXX_Z68'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z72' then 'DXX_Z72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z74' then 'DXX_Z74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z79' then 'DXX_Z79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z85' then 'DXX_Z85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z86' then 'DXX_Z86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z87' then 'DXX_Z87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z89' then 'DXX_Z89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z90' then 'DXX_Z90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z91' then 'DXX_Z91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z93' then 'DXX_Z93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z94' then 'DXX_Z94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z95' then 'DXX_Z95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z96' then 'DXX_Z96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z98' then 'DXX_Z98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z99' then 'DXX_Z99'
+						 ELSE NULL END AS FACTOR,
+						CASE 
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C67' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C77' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C7A' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D68' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E66' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I36' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I67' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I77' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K58' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K66' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M1A' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N28' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S36' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z68' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z99' then 1
+						ELSE 0 END AS RESP_VAL
+					FROM #risk_score
+							join HCHB.dbo.CLIENT_EPISODE_OASIS  on rs_ceo_cevid = ceo_cevid
+							join HCHB.DBO.CLIENT_EPISODE_OASIS_ANSWERS A
+							on ceo_id = ceoa_ceoid
+								  join SHARED_REFERENCE.oasis.OASIS_MOS O on ceoa_omid=om_id
+					   WHERE -- om_formlocation LIKE '%M1023%' 
+									om_formlocation in  ('M1021_PRIMARY_DIAG_ICD', 'M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD', 'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD',
+												'M1017_CHGREG_ICD1','M1017_CHGREG_ICD2','M1017_CHGREG_ICD3','M1017_CHGREG_ICD4','M1017_CHGREG_ICD5','M1017_CHGREG_ICD6',
+											'M1025_OPT_DIAG_ICD_A3','M1025_OPT_DIAG_ICD_A4','M1025_OPT_DIAG_ICD_B3','M1025_OPT_DIAG_ICD_B4','M1025_OPT_DIAG_ICD_C3',
+											'M1025_OPT_DIAG_ICD_C4','M1025_OPT_DIAG_ICD_D3','M1025_OPT_DIAG_ICD_D4','M1025_OPT_DIAG_ICD_E3','M1025_OPT_DIAG_ICD_E4',
+											'M1025_OPT_DIAG_ICD_F3','M1025_OPT_DIAG_ICD_F4',
+											'M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD','M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD','M1011_14_DAY_INP5_ICD',
+											'M1011_14_DAY_INP6_ICD')
+								and ceoa_answer != ''
+				--		and  rs_ceo_cevid = 19430 -- temporary for testing drop later
+				) DX
+				where dx.factor is not null
+				group by rs_epiid, ceo_cevid, rs_astrsn, factor
+				UNION --====================== DIAGNOSIS CF  =======================================================================
+				select rs_epiid,ceo_cevid,rs_astrsn, factor, factor as parameter, MAX(RESP_VAL) AS factor_level, MAX(RESP_VAL) AS RESP_VAL, MAX(2) AS cf_priority
+				FROM (
+					SELECT  rs_epiid, ceo_cevid, rs_astrsn
+							, 
+						CASE  
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A04' then 'DXX_A04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A09' then 'DXX_A09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A31' then 'DXX_A31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A40' then 'DXX_A40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A41' then 'DXX_A41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A49' then 'DXX_A49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A69' then 'DXX_A69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B00' then 'DXX_B00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B02' then 'DXX_B02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B18' then 'DXX_B18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B19' then 'DXX_B19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B20' then 'DXX_B20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B25' then 'DXX_B25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B34' then 'DXX_B34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B35' then 'DXX_B35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B37' then 'DXX_B37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B95' then 'DXX_B95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B96' then 'DXX_B96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B97' then 'DXX_B97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C02' then 'DXX_C02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C06' then 'DXX_C06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C09' then 'DXX_C09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C10' then 'DXX_C10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C11' then 'DXX_C11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C15' then 'DXX_C15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C16' then 'DXX_C16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C17' then 'DXX_C17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C18' then 'DXX_C18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C19' then 'DXX_C19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C20' then 'DXX_C20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C21' then 'DXX_C21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C22' then 'DXX_C22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C23' then 'DXX_C23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C24' then 'DXX_C24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C25' then 'DXX_C25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C32' then 'DXX_C32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C34' then 'DXX_C34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C40' then 'DXX_C40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C41' then 'DXX_C41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C43' then 'DXX_C43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C44' then 'DXX_C44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C45' then 'DXX_C45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C48' then 'DXX_C48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C49' then 'DXX_C49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C50' then 'DXX_C50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C51' then 'DXX_C51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C53' then 'DXX_C53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C54' then 'DXX_C54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C55' then 'DXX_C55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C56' then 'DXX_C56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C57' then 'DXX_C57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C61' then 'DXX_C61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C64' then 'DXX_C64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C67' then 'DXX_C67'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C71' then 'DXX_C71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C73' then 'DXX_C73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C76' then 'DXX_C76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C77' then 'DXX_C77'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C78' then 'DXX_C78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C79' then 'DXX_C79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C7A' then 'DXX_C7A'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C80' then 'DXX_C80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C81' then 'DXX_C81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C83' then 'DXX_C83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C84' then 'DXX_C84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C85' then 'DXX_C85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C88' then 'DXX_C88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C90' then 'DXX_C90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C91' then 'DXX_C91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C92' then 'DXX_C92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C95' then 'DXX_C95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D05' then 'DXX_D05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D07' then 'DXX_D07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D12' then 'DXX_D12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D25' then 'DXX_D25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D29' then 'DXX_D29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D32' then 'DXX_D32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D33' then 'DXX_D33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D35' then 'DXX_D35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D37' then 'DXX_D37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D43' then 'DXX_D43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D46' then 'DXX_D46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D47' then 'DXX_D47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D48' then 'DXX_D48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D49' then 'DXX_D49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D50' then 'DXX_D50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D51' then 'DXX_D51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D53' then 'DXX_D53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D56' then 'DXX_D56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D57' then 'DXX_D57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D59' then 'DXX_D59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D61' then 'DXX_D61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D62' then 'DXX_D62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D63' then 'DXX_D63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D64' then 'DXX_D64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D68' then 'DXX_D68'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D69' then 'DXX_D69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D70' then 'DXX_D70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D72' then 'DXX_D72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D75' then 'DXX_D75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D86' then 'DXX_D86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D89' then 'DXX_D89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E03' then 'DXX_E03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E04' then 'DXX_E04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E05' then 'DXX_E05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E06' then 'DXX_E06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E07' then 'DXX_E07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E08' then 'DXX_E08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E09' then 'DXX_E09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E10' then 'DXX_E10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E11' then 'DXX_E11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E13' then 'DXX_E13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E16' then 'DXX_E16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E21' then 'DXX_E21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E23' then 'DXX_E23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E27' then 'DXX_E27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E43' then 'DXX_E43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E44' then 'DXX_E44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E46' then 'DXX_E46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E53' then 'DXX_E53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E55' then 'DXX_E55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E56' then 'DXX_E56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E66' then 'DXX_E66'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E78' then 'DXX_E78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E80' then 'DXX_E80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E83' then 'DXX_E83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E85' then 'DXX_E85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E86' then 'DXX_E86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E87' then 'DXX_E87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E88' then 'DXX_E88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E89' then 'DXX_E89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F01' then 'DXX_F01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F02' then 'DXX_F02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F03' then 'DXX_F03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F05' then 'DXX_F05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F06' then 'DXX_F06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F10' then 'DXX_F10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F11' then 'DXX_F11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F14' then 'DXX_F14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F17' then 'DXX_F17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F19' then 'DXX_F19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F20' then 'DXX_F20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F22' then 'DXX_F22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F25' then 'DXX_F25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F29' then 'DXX_F29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F31' then 'DXX_F31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F32' then 'DXX_F32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F33' then 'DXX_F33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F34' then 'DXX_F34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F39' then 'DXX_F39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F40' then 'DXX_F40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F41' then 'DXX_F41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F43' then 'DXX_F43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F44' then 'DXX_F44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F60' then 'DXX_F60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F64' then 'DXX_F64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F79' then 'DXX_F79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F80' then 'DXX_F80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F84' then 'DXX_F84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F90' then 'DXX_F90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G04' then 'DXX_G04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G06' then 'DXX_G06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G12' then 'DXX_G12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G20' then 'DXX_G20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G23' then 'DXX_G23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G24' then 'DXX_G24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G25' then 'DXX_G25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G30' then 'DXX_G30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G31' then 'DXX_G31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G35' then 'DXX_G35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G37' then 'DXX_G37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G40' then 'DXX_G40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G43' then 'DXX_G43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G45' then 'DXX_G45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G46' then 'DXX_G46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G47' then 'DXX_G47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G50' then 'DXX_G50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G51' then 'DXX_G51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G56' then 'DXX_G56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G57' then 'DXX_G57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G60' then 'DXX_G60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G61' then 'DXX_G61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G62' then 'DXX_G62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G70' then 'DXX_G70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G71' then 'DXX_G71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G72' then 'DXX_G72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G80' then 'DXX_G80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G81' then 'DXX_G81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G82' then 'DXX_G82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G83' then 'DXX_G83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G89' then 'DXX_G89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G90' then 'DXX_G90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G91' then 'DXX_G91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G93' then 'DXX_G93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G95' then 'DXX_G95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H25' then 'DXX_H25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H26' then 'DXX_H26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H35' then 'DXX_H35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H40' then 'DXX_H40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H53' then 'DXX_H53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H54' then 'DXX_H54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H81' then 'DXX_H81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H90' then 'DXX_H90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H91' then 'DXX_H91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I05' then 'DXX_I05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I06' then 'DXX_I06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I07' then 'DXX_I07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I08' then 'DXX_I08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I09' then 'DXX_I09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I10' then 'DXX_I10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I11' then 'DXX_I11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I12' then 'DXX_I12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I13' then 'DXX_I13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I15' then 'DXX_I15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I16' then 'DXX_I16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I20' then 'DXX_I20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I21' then 'DXX_I21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I22' then 'DXX_I22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I24' then 'DXX_I24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I25' then 'DXX_I25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I26' then 'DXX_I26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I27' then 'DXX_I27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I31' then 'DXX_I31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I33' then 'DXX_I33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I34' then 'DXX_I34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I35' then 'DXX_I35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I36' then 'DXX_I36'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I38' then 'DXX_I38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I42' then 'DXX_I42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I44' then 'DXX_I44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I45' then 'DXX_I45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I46' then 'DXX_I46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I47' then 'DXX_I47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I48' then 'DXX_I48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I49' then 'DXX_I49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I50' then 'DXX_I50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I51' then 'DXX_I51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I60' then 'DXX_I60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I61' then 'DXX_I61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I62' then 'DXX_I62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I63' then 'DXX_I63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I65' then 'DXX_I65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I67' then 'DXX_I67'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I69' then 'DXX_I69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I70' then 'DXX_I70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I71' then 'DXX_I71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I72' then 'DXX_I72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I73' then 'DXX_I73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I74' then 'DXX_I74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I77' then 'DXX_I77'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I80' then 'DXX_I80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I82' then 'DXX_I82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I83' then 'DXX_I83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I85' then 'DXX_I85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I87' then 'DXX_I87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I89' then 'DXX_I89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I95' then 'DXX_I95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I96' then 'DXX_I96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I97' then 'DXX_I97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I99' then 'DXX_I99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J06' then 'DXX_J06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J09' then 'DXX_J09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J10' then 'DXX_J10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J11' then 'DXX_J11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J12' then 'DXX_J12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J15' then 'DXX_J15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J18' then 'DXX_J18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J20' then 'DXX_J20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J30' then 'DXX_J30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J38' then 'DXX_J38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J39' then 'DXX_J39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J40' then 'DXX_J40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J42' then 'DXX_J42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J43' then 'DXX_J43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J44' then 'DXX_J44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J45' then 'DXX_J45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J47' then 'DXX_J47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J69' then 'DXX_J69'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J80' then 'DXX_J80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J81' then 'DXX_J81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J84' then 'DXX_J84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J86' then 'DXX_J86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J90' then 'DXX_J90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J91' then 'DXX_J91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J93' then 'DXX_J93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J94' then 'DXX_J94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J95' then 'DXX_J95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J96' then 'DXX_J96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J98' then 'DXX_J98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K11' then 'DXX_K11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K20' then 'DXX_K20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K21' then 'DXX_K21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K22' then 'DXX_K22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K25' then 'DXX_K25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K26' then 'DXX_K26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K27' then 'DXX_K27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K29' then 'DXX_K29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K31' then 'DXX_K31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K35' then 'DXX_K35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K40' then 'DXX_K40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K42' then 'DXX_K42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K43' then 'DXX_K43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K44' then 'DXX_K44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K46' then 'DXX_K46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K50' then 'DXX_K50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K51' then 'DXX_K51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K52' then 'DXX_K52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K55' then 'DXX_K55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K56' then 'DXX_K56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K57' then 'DXX_K57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K58' then 'DXX_K58'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K59' then 'DXX_K59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K60' then 'DXX_K60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K61' then 'DXX_K61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K62' then 'DXX_K62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K63' then 'DXX_K63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K64' then 'DXX_K64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K65' then 'DXX_K65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K66' then 'DXX_K66'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K70' then 'DXX_K70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K72' then 'DXX_K72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K74' then 'DXX_K74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K75' then 'DXX_K75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K76' then 'DXX_K76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K80' then 'DXX_K80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K81' then 'DXX_K81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K82' then 'DXX_K82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K83' then 'DXX_K83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K85' then 'DXX_K85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K86' then 'DXX_K86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K90' then 'DXX_K90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K91' then 'DXX_K91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K92' then 'DXX_K92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K94' then 'DXX_K94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L02' then 'DXX_L02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L03' then 'DXX_L03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L05' then 'DXX_L05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L08' then 'DXX_L08'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L12' then 'DXX_L12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L29' then 'DXX_L29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L30' then 'DXX_L30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L40' then 'DXX_L40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L72' then 'DXX_L72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L73' then 'DXX_L73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L76' then 'DXX_L76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L89' then 'DXX_L89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L97' then 'DXX_L97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L98' then 'DXX_L98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M00' then 'DXX_M00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M05' then 'DXX_M05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M06' then 'DXX_M06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M10' then 'DXX_M10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M12' then 'DXX_M12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M13' then 'DXX_M13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M15' then 'DXX_M15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M16' then 'DXX_M16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M17' then 'DXX_M17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M19' then 'DXX_M19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M1A' then 'DXX_M1A'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M20' then 'DXX_M20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M21' then 'DXX_M21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M24' then 'DXX_M24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M25' then 'DXX_M25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M31' then 'DXX_M31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M32' then 'DXX_M32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M34' then 'DXX_M34'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M35' then 'DXX_M35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M40' then 'DXX_M40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M41' then 'DXX_M41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M43' then 'DXX_M43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M45' then 'DXX_M45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M46' then 'DXX_M46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M47' then 'DXX_M47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M48' then 'DXX_M48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M50' then 'DXX_M50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M51' then 'DXX_M51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M53' then 'DXX_M53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M54' then 'DXX_M54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M62' then 'DXX_M62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M65' then 'DXX_M65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M70' then 'DXX_M70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M71' then 'DXX_M71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M72' then 'DXX_M72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M75' then 'DXX_M75'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M76' then 'DXX_M76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M79' then 'DXX_M79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M80' then 'DXX_M80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M81' then 'DXX_M81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M84' then 'DXX_M84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M85' then 'DXX_M85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M86' then 'DXX_M86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M87' then 'DXX_M87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M89' then 'DXX_M89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M96' then 'DXX_M96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M97' then 'DXX_M97'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M99' then 'DXX_M99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N10' then 'DXX_N10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N12' then 'DXX_N12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N13' then 'DXX_N13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N17' then 'DXX_N17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N18' then 'DXX_N18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N19' then 'DXX_N19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N20' then 'DXX_N20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N25' then 'DXX_N25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N28' then 'DXX_N28'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N30' then 'DXX_N30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N31' then 'DXX_N31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N32' then 'DXX_N32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N39' then 'DXX_N39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N40' then 'DXX_N40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N41' then 'DXX_N41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N42' then 'DXX_N42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N49' then 'DXX_N49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N50' then 'DXX_N50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N61' then 'DXX_N61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N63' then 'DXX_N63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N64' then 'DXX_N64'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N73' then 'DXX_N73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N81' then 'DXX_N81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N82' then 'DXX_N82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N83' then 'DXX_N83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N85' then 'DXX_N85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N93' then 'DXX_N93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N99' then 'DXX_N99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O86' then 'DXX_O86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O90' then 'DXX_O90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q05' then 'DXX_Q05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q21' then 'DXX_Q21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q23' then 'DXX_Q23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q61' then 'DXX_Q61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q90' then 'DXX_Q90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R00' then 'DXX_R00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R01' then 'DXX_R01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R03' then 'DXX_R03'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R04' then 'DXX_R04'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R05' then 'DXX_R05'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R06' then 'DXX_R06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R07' then 'DXX_R07'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R09' then 'DXX_R09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R10' then 'DXX_R10'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R11' then 'DXX_R11'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R13' then 'DXX_R13'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R15' then 'DXX_R15'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R16' then 'DXX_R16'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R17' then 'DXX_R17'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R18' then 'DXX_R18'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R19' then 'DXX_R19'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R20' then 'DXX_R20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R21' then 'DXX_R21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R22' then 'DXX_R22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R23' then 'DXX_R23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R25' then 'DXX_R25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R26' then 'DXX_R26'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R27' then 'DXX_R27'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R29' then 'DXX_R29'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R30' then 'DXX_R30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R31' then 'DXX_R31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R32' then 'DXX_R32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R33' then 'DXX_R33'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R35' then 'DXX_R35'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R39' then 'DXX_R39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R41' then 'DXX_R41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R42' then 'DXX_R42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R44' then 'DXX_R44'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R45' then 'DXX_R45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R47' then 'DXX_R47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R50' then 'DXX_R50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R51' then 'DXX_R51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R52' then 'DXX_R52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R53' then 'DXX_R53'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R54' then 'DXX_R54'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R55' then 'DXX_R55'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R56' then 'DXX_R56'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R57' then 'DXX_R57'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R59' then 'DXX_R59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R60' then 'DXX_R60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R62' then 'DXX_R62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R63' then 'DXX_R63'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R65' then 'DXX_R65'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R73' then 'DXX_R73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R74' then 'DXX_R74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R76' then 'DXX_R76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R78' then 'DXX_R78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R79' then 'DXX_R79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R91' then 'DXX_R91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R93' then 'DXX_R93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R94' then 'DXX_R94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S00' then 'DXX_S00'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S01' then 'DXX_S01'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S02' then 'DXX_S02'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S06' then 'DXX_S06'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S09' then 'DXX_S09'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S12' then 'DXX_S12'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S14' then 'DXX_S14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S20' then 'DXX_S20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S21' then 'DXX_S21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S22' then 'DXX_S22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S30' then 'DXX_S30'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S31' then 'DXX_S31'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S32' then 'DXX_S32'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S36' then 'DXX_S36'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S37' then 'DXX_S37'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S39' then 'DXX_S39'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S40' then 'DXX_S40'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S41' then 'DXX_S41'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S42' then 'DXX_S42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S43' then 'DXX_S43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S46' then 'DXX_S46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S49' then 'DXX_S49'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S50' then 'DXX_S50'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S51' then 'DXX_S51'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S52' then 'DXX_S52'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S59' then 'DXX_S59'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S60' then 'DXX_S60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S61' then 'DXX_S61'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S62' then 'DXX_S62'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S70' then 'DXX_S70'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S71' then 'DXX_S71'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S72' then 'DXX_S72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S73' then 'DXX_S73'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S76' then 'DXX_S76'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S80' then 'DXX_S80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S81' then 'DXX_S81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S82' then 'DXX_S82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S83' then 'DXX_S83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S86' then 'DXX_S86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S88' then 'DXX_S88'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S89' then 'DXX_S89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S90' then 'DXX_S90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S91' then 'DXX_S91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S92' then 'DXX_S92'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S93' then 'DXX_S93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S98' then 'DXX_S98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S99' then 'DXX_S99'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T14' then 'DXX_T14'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T20' then 'DXX_T20'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T21' then 'DXX_T21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T22' then 'DXX_T22'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T23' then 'DXX_T23'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T24' then 'DXX_T24'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T25' then 'DXX_T25'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T38' then 'DXX_T38'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T45' then 'DXX_T45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T78' then 'DXX_T78'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T79' then 'DXX_T79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T80' then 'DXX_T80'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T81' then 'DXX_T81'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T82' then 'DXX_T82'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T83' then 'DXX_T83'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T84' then 'DXX_T84'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T85' then 'DXX_T85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T86' then 'DXX_T86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T87' then 'DXX_T87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z21' then 'DXX_Z21'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z42' then 'DXX_Z42'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z43' then 'DXX_Z43'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z45' then 'DXX_Z45'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z46' then 'DXX_Z46'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z47' then 'DXX_Z47'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z48' then 'DXX_Z48'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z60' then 'DXX_Z60'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z68' then 'DXX_Z68'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z72' then 'DXX_Z72'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z74' then 'DXX_Z74'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z79' then 'DXX_Z79'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z85' then 'DXX_Z85'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z86' then 'DXX_Z86'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z87' then 'DXX_Z87'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z89' then 'DXX_Z89'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z90' then 'DXX_Z90'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z91' then 'DXX_Z91'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z93' then 'DXX_Z93'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z94' then 'DXX_Z94'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z95' then 'DXX_Z95'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z96' then 'DXX_Z96'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z98' then 'DXX_Z98'
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z99' then 'DXX_Z99'
+						 ELSE NULL END AS FACTOR,
+						CASE 
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='A69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='B97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C67' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C77' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C7A' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='C95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D68' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='D89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E66' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='E89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='F90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='G95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='H91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I36' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I67' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I77' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='I99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J69' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='J98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K58' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K66' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='K94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L08' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='L98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M1A' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M34' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M75' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M97' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='M99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N28' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N64' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='N99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='O90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Q90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R03' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R04' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R05' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R07' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R10' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R11' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R13' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R15' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R16' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R17' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R18' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R19' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R26' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R27' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R29' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R33' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R35' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R44' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R53' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R54' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R55' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R56' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R57' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R63' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R65' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='R94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S00' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S01' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S02' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S06' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S09' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S12' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S30' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S31' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S32' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S36' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S37' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S39' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S40' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S41' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S49' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S50' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S51' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S52' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S59' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S61' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S62' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S70' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S71' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S73' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S76' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S88' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S92' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='S99' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T14' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T20' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T22' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T23' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T24' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T25' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T38' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T78' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T80' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T81' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T82' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T83' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T84' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='T87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z21' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z42' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z43' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z45' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z46' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z47' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z48' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z60' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z68' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z72' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z74' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z79' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z85' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z86' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z87' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z89' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z90' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z91' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z93' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z94' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z95' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z96' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z98' then 1
+							when  SUBSTRING(a.ceoa_answer, 1, 3) ='Z99' then 1
+						ELSE 0 END AS RESP_VAL
+					from #risk_score
+							join HCHB.dbo.CLIENT_EPISODE_OASIS  on RS_CFCEVID = CEO_CEVID -- carry forward id 
+							join HCHB.DBO.CLIENT_EPISODE_OASIS_ANSWERS A
+							on ceo_id = ceoa_ceoid
+								  join SHARED_REFERENCE.oasis.OASIS_MOS O on ceoa_omid=om_id
+					   WHERE -- om_formlocation LIKE '%M1023%' 
+									om_formlocation in  ('M1021_PRIMARY_DIAG_ICD', 'M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD', 'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD',
+												'M1017_CHGREG_ICD1','M1017_CHGREG_ICD2','M1017_CHGREG_ICD3','M1017_CHGREG_ICD4','M1017_CHGREG_ICD5','M1017_CHGREG_ICD6',
+											'M1025_OPT_DIAG_ICD_A3','M1025_OPT_DIAG_ICD_A4','M1025_OPT_DIAG_ICD_B3','M1025_OPT_DIAG_ICD_B4','M1025_OPT_DIAG_ICD_C3',
+											'M1025_OPT_DIAG_ICD_C4','M1025_OPT_DIAG_ICD_D3','M1025_OPT_DIAG_ICD_D4','M1025_OPT_DIAG_ICD_E3','M1025_OPT_DIAG_ICD_E4',
+											'M1025_OPT_DIAG_ICD_F3','M1025_OPT_DIAG_ICD_F4',
+											'M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD','M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD','M1011_14_DAY_INP5_ICD',
+											'M1011_14_DAY_INP6_ICD')
+								and ceoa_answer != ''
+						--and  rs_ceo_cevid = 19430 -- temporary for testing drop later
+				) DX
+				where dx.factor is not null
+				group by rs_epiid, ceo_cevid, rs_astrsn, factor
+				UNION --=============================== Broader Codigns for BP3  ==========================================================
+				-- carry forward not required for these defitions at this time
+				-- select ceo_cevid, factor, factor as parameter, MAX(RESP_VAL) AS RESP_VAL, MAX(2) AS cf_priority
+				select  rs_epiid,ceo_cevid,rs_astrsn
+								, UPPER(factor) AS factor
+								, UPPER(factor) as parameter
+								, MAX(RESP_VAL) AS factor_level
+								, MAX(RESP_VAL) AS resp_val
+								, 1 as cf_priority
+				FROM (
+						SELECT rs_epiid, ceo_cevid, rs_astrsn,ceoa_answer
+										,  case 
+										when om_formlocation = 'M1021_PRIMARY_DIAG_ICD' AND SUBSTRING(a.ceoa_answer, 1, 3) in ('I21', 'I22') then 'DX_PRIM_AMI_B'  
+										when om_formlocation in ('M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD', 'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD','M1023_OTH_DIAG6_ICD') AND SUBSTRING 
+(a.ceoa_answer, 1, 3) in('I21','I22')    then 'DX_SEC_AMI_B'
+													when om_formlocation = 'M1011_14_DAY_INP1_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) in ('I21', 'I22') then 'IPDX_PRIM_AMI_B'  
+										when om_formlocation in ('M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD', 'M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD', 'M1011_14_DAY_INP5_ICD','M1011_14_DAY_INP6_ICD')
+																AND SUBSTRING(a.ceoa_answer, 1, 3) in('I21','I22','I25')    then 'IPDX_ANY_AMI_B'
+													when om_formlocation = 'M1021_PRIMARY_DIAG_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) = 'I50' then 'DX_PRIM_CHF_B'
+													when om_formlocation = 'M1011_14_DAY_INP1_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) = 'I50' then 'IPDX_PRIM_CHF_B'
+													when om_formlocation in ('M1021_PRIMARY_DIAG_ICD', 'M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD',  
+'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD','M1023_OTH_DIAG6_ICD')
+																AND SUBSTRING(a.ceoa_answer, 1, 3)  in('I13','I11','I09') then 'DX_OTH_HF_B' 
+													when  om_formlocation in ('M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD',  
+'M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD','M1011_14_DAY_INP5_ICD','M1011_14_DAY_INP6_ICD') 
+																AND SUBSTRING(a.ceoa_answer, 1, 3) in('I13','I11','I09')   then  'IPDX_OTH_HF_B'          
+								ELSE NULL END AS factor
+								,  case 
+										when om_formlocation = 'M1021_PRIMARY_DIAG_ICD' AND SUBSTRING(a.ceoa_answer, 1, 3) in ('I21', 'I22') then 1
+										when om_formlocation in ('M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD', 'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD','M1023_OTH_DIAG6_ICD') AND SUBSTRING 
+(a.ceoa_answer, 1, 3) in('I21','I22') then 1
+													when om_formlocation = 'M1011_14_DAY_INP1_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) in ('I21', 'I22') then 1
+										when om_formlocation in ('M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD', 'M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD', 'M1011_14_DAY_INP5_ICD','M1011_14_DAY_INP6_ICD')
+																AND SUBSTRING(a.ceoa_answer, 1, 3) in('I21','I22','I25')    then 1
+													when om_formlocation = 'M1021_PRIMARY_DIAG_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) = 'I50' then 1
+													when om_formlocation = 'M1011_14_DAY_INP1_ICD'  AND SUBSTRING(a.ceoa_answer, 1, 3) = 'I50' then 1
+													when om_formlocation in ('M1021_PRIMARY_DIAG_ICD', 'M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD',  
+'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD','M1023_OTH_DIAG6_ICD')
+																AND SUBSTRING(a.ceoa_answer, 1, 3)  in('I13','I11','I09') then 1
+													when  om_formlocation in ('M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD',  
+'M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD','M1011_14_DAY_INP5_ICD','M1011_14_DAY_INP6_ICD') 
+																AND SUBSTRING(a.ceoa_answer, 1, 3) in('I13','I11','I09')   then  1   
+								ELSE NULL END  RESP_VAL
+					from #risk_score
+										join HCHB.dbo.CLIENT_EPISODE_OASIS  on rs_ceo_cevid = ceo_cevid
+										join HCHB.DBO.CLIENT_EPISODE_OASIS_ANSWERS A
+										on ceo_id = ceoa_ceoid
+												join SHARED_REFERENCE.oasis.OASIS_MOS O on ceoa_omid=om_id
+							WHERE -- om_formlocation LIKE '%M1023%' 
+													om_formlocation in  
+																			('M1021_PRIMARY_DIAG_ICD', 'M1023_OTH_DIAG1_ICD', 'M1023_OTH_DIAG2_ICD', 'M1023_OTH_DIAG3_ICD',  
+'M1023_OTH_DIAG4_ICD','M1023_OTH_DIAG5_ICD',
+																				 
+'M1017_CHGREG_ICD1','M1017_CHGREG_ICD2','M1017_CHGREG_ICD3','M1017_CHGREG_ICD4','M1017_CHGREG_ICD5','M1017_CHGREG_ICD6',
+																				 
+'M1025_OPT_DIAG_ICD_A3','M1025_OPT_DIAG_ICD_A4','M1025_OPT_DIAG_ICD_B3','M1025_OPT_DIAG_ICD_B4','M1025_OPT_DIAG_ICD_C3',
+																				 
+'M1025_OPT_DIAG_ICD_C4','M1025_OPT_DIAG_ICD_D3','M1025_OPT_DIAG_ICD_D4','M1025_OPT_DIAG_ICD_E3','M1025_OPT_DIAG_ICD_E4',
+																				'M1025_OPT_DIAG_ICD_F3','M1025_OPT_DIAG_ICD_F4',
+																				 
+'M1011_14_DAY_INP1_ICD','M1011_14_DAY_INP2_ICD','M1011_14_DAY_INP3_ICD','M1011_14_DAY_INP4_ICD','M1011_14_DAY_INP5_ICD','M1011_14_DAY_INP6_ICD'
+																)
+											and ceoa_answer != '' 
+																AND rs_astrsn in (1,3)
+															) dx2
+				where factor is not null                                        
+				group by rs_epiid,ceo_cevid,rs_astrsn, factor ) AA
+			) AAA
+			WHERE srt_cf_priority = 1
+				;
+
+	OPEN C
+	 FETCH NEXT FROM C INTO @RS_EPIID , @pRS_CEO_CEVID, @RS_ASTRSN , @FACTOR_ID ,@PARAMETER , @RESP_NUM ,@RESP_VAL ;
+
+	 WHILE @@FETCH_STATUS = 0
+	 begin
+	
+				 INSERT INTO @RISK_SCORE_X VALUES( @RS_EPIID , @pRS_CEO_CEVID, @RS_ASTRSN , @FACTOR_ID ,@PARAMETER , @RESP_NUM ,@RESP_VAL )
+
+			   -- what you want to do in catch
+			   declare @error int, @message varchar(4000), @xstate int;
+			   select @error = ERROR_NUMBER(),
+					 @message = ERROR_MESSAGE(), @xstate = XACT_STATE();
+			
+			FETCH NEXT FROM C INTO @RS_EPIID , @pRS_CEO_CEVID, @RS_ASTRSN , @FACTOR_ID ,@PARAMETER , @RESP_NUM ,@RESP_VAL ;
+
+	 end
+	 CLOSE C;
+	-- 关闭游标
+    -- 释放游标
+    DEALLOCATE C;
+
+
+	
+
+     truncate table [dbo].[risk_score]
+
+	---hospitalization  bp3 identification
+	 insert into  dbo.risk_score 
+	       (rs_epiid,rs_ceo_cevid,rs_astrsn,rs_pred_val,rs_lmid,rs_lrlid) 	
+          select rs_epiid,rs_ceo_cevid, lrsb_astrsn,
+		       1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val ))) as pred_val,lrsb_lmid,
+               case 
+			      when 1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  >@hosphigh then 25103
+				  when 1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  <@hosplow  then 25101
+				  else 25102
+			   end as ind
+          from dbo.lu_risk_score_beta 
+	         join  @RISK_SCORE_X x
+		          on lrsb_parameter = parameter 
+				     and lrsb_astrsn = rs_astrsn
+          where lrsb_lmid='25100'  
+          group by rs_epiid,rs_ceo_cevid ,lrsb_astrsn,lrsb_lmid
+     union
+          select rs_epiid,rs_ceo_cevid, lrsb_astrsn,
+						   1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  as coef2,lrsb_lmid,
+						   case 
+							  when 1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  > @bp3identf then 25301 
+							  else -1
+						   end as ind
+		  from dbo.lu_risk_score_beta 
+						 join @RISK_SCORE_X  x
+							  on lrsb_parameter  = parameter 
+								 and lrsb_astrsn = rs_astrsn
+						-- join medicare_epiid on m_epiid = rs_epiid
+		  where lrsb_lmid='25300' 
+		  group by rs_epiid,rs_ceo_cevid ,lrsb_astrsn,lrsb_lmid
+     
+	 --bp3 hospitalization 
+	  insert into dbo.risk_score 
+	       (rs_epiid,rs_ceo_cevid,rs_astrsn,rs_pred_val,rs_lmid,rs_lrlid) 	
+          select  rs_epiid,rs_ceo_cevid,rs_astrsn,rs_pred_val, 25200 as rs_lmid,
+		       case 
+			      when  rs_pred_val  > @bp3hosphigh then 25203
+				  when  rs_pred_val  < @bp3hosplow  then 25201
+				  else 25202
+			   end as ind
+		   from dbo.risk_score 
+		   where rs_lmid='25100'  
+	 
+		 
+	 ---bp3 identification
+
+			 /*
+			 ;with medicare_epiid (M_EPIID) as(
+			 select distinct epi_id
+			 from HCHB.dbo.CLIENT_EPISODE_FS
+				  join HCHB.dbo.client_episodes_all on cefs_epiid = epi_id
+					  join HCHB.dbo.PAYOR_sources on ps_ptid = cefs_ptid 
+			 where --ps_ptid = 57
+			       ps_freq = 5
+				   and ps_desc <> 'zz system use only - do not use'
+				   ) 
+				   
+		insert into  dbo.risk_score (rs_epiid,rs_ceo_cevid,rs_astrsn,rs_pred_val,rs_lmid,rs_lrlid)
+			 select rs_epiid,rs_ceo_cevid, lrsb_astrsn,
+						   1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  as coef2,lrsb_lmid,
+						   case 
+							  when 1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  > @bp3identf then 25301 
+							  else -1
+						   end as ind
+					 from dbo.lu_risk_score_beta 
+						 join @RISK_SCORE_X  x
+							  on lrsb_parameter  = parameter 
+								 and lrsb_astrsn = rs_astrsn
+						-- join medicare_epiid on m_epiid = rs_epiid
+					 where lrsb_lmid='25300' 
+					 group by rs_epiid,rs_ceo_cevid ,lrsb_astrsn,lrsb_lmid
+           */
+
+     ---bp3 hospitalization 
+	/* insert into  dbo.risk_score 
+	       (rs_epiid,rs_ceo_cevid,rs_astrsn,rs_pred_val,rs_lmid,rs_lrlid)
+	       select rs_epiid,rs_ceo_cevid, lrsb_astrsn,
+	  	       1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  as pred_val,25200 lrsb_lmid,
+               case 
+			      when  1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  >@bp3hosphigh then 25203
+				  when  1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  <@bp3hosplow then 25201
+				  else 25202
+			   end as ind
+           from dbo.lu_risk_score_beta 
+	         join   @RISK_SCORE_X x
+		          on lrsb_parameter = parameter 
+				     and lrsb_astrsn = rs_astrsn
+           where lrsb_lmid='25100'  
+		    and rs_epiid in (
+						select cect_epiid
+						from HCHB.dbo.CLIENT_EPISODE_CARE_TYPES
+						WHERE cect_ctypeid =  25030) -- BP3
+           group by rs_epiid,rs_ceo_cevid ,lrsb_astrsn,lrsb_lmid
+		   union
+		   SELECT  x.rs_epiid,x.rs_ceo_cevid, lrsb_astrsn,
+	  	       1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  as pred_val, 25200 lrsb_lmid,
+               case 
+			      when  1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  >@bp3hosphigh then 25203
+				  when  1/ (1 + exp(-1*sum(lrsb_coef*x.resp_val )))  <@bp3hosplow  then 25201
+				  else 25202
+			   end as ind
+		  FROM 
+		     dbo.lu_risk_score_beta 
+	         join #RISK_SCORE_X x
+		          on lrsb_parameter = parameter 
+				     and lrsb_astrsn = rs_astrsn
+		     join dbo.risk_score r
+			      on x.rs_epiid = r.rs_epiid and 
+				     x.rs_ceo_cevid = r.rs_ceo_cevid and 
+					 x.rs_astrsn = r.rs_astrsn 
+		  WHERE rs_lmid = 25300 and rs_lrlid = 25301
+		  group by x.rs_epiid,x.rs_ceo_cevid ,lrsb_astrsn,lrsb_lmid
+		*/
+
+
+	  IF OBJECT_ID('tempdb..#evacuation_zone') IS NOT NULL DROP TABLE #evacuation_zone
+	  CREATE TABLE #evacuation_zone (ez_epiid int,ez_ceslid int)
+
+		 
+		 ;with newest_date (ncesl_id,ncesl_cslid,ncesl_epiid,newest_date)
+		 as (select cesl_id,cesl_cslid,cesl_epiid ,
+			 case when cesl.cesl_insertdate > ar.ar_datemodified
+				  then cesl.cesl_insertdate 
+				  when cesl.cesl_insertdate < ar.ar_datemodified
+				  then ar.ar_datemodified
+				  when ar.ar_datemodified is null
+				  then cesl.cesl_insertdate 	  
+			  end as newest_date
+			 from HCHB.dbo.client_episode_service_locations cesl with(nolock)
+			 left join HCHB.dbo.auditreport_client_episode_service_locations ar with(nolock) on ar.ar_cesl_id = cesl.cesl_id
+			 ) 
+		 insert into #evacuation_zone (ez_ceslid,ez_epiid)
+		 select distinct
+			 cesl_id
+			,cesl_epiid
+		 from HCHB.dbo.client_episode_service_locations cesl  join newest_date
+			  on  cesl_id = ncesl_id and 
+				  cesl_cslid = ncesl_cslid and
+				  cesl_epiid = ncesl_epiid
+		 where  DATEDIFF(day,newest_date, getdate()) < @Param1
+			union
+		 SELECT distinct cesl_id,cesl_epiid
+		 FROM HCHB.DBO.CLIENT_EPISODE_SERVICE_LOCATIONS
+		 where cesl_epiid  not in (select rsh_epiid from dbo.risk_score_history)
+			  and cesl_id  not in (select rsh_ceslid from dbo.risk_score_history)
+  
+     ----#medicare_epiid episoede, frequency = 5
+	  IF OBJECT_ID('tempdb..#medicare_epiid') IS NOT NULL DROP TABLE #medicare_epiid
+	  CREATE TABLE #medicare_epiid (m_epiid int)
+
+			 insert into #medicare_epiid (M_EPIID) 
+			 select distinct epi_id
+			 from HCHB.dbo.CLIENT_EPISODE_FS
+				  join HCHB.dbo.client_episodes_all on cefs_epiid = epi_id
+					  join HCHB.dbo.PAYOR_sources on ps_id = cefs_psid 
+			 where --ps_ptid = 57
+			       ps_freq = 5
+				   and ps_desc <> 'zz system use only - do not use'
+			
+	 
+	 ----log table loaded  		 
+	  
+	  truncate table [dbo].[risk_score_log]
+
+	 -- hospitalization, bp3 indentification, bp3 hospitalization 
+			;with bp3_epi (bp3_epiid,bp3_ceo_cevid) as
+				   (
+					select rs_epiid,rs_ceo_cevid
+					from dbo.risk_score r
+					WHERE rs_lmid = 25200
+					   and EXISTS (
+						select *
+						from HCHB.dbo.CLIENT_EPISODE_CARE_TYPES
+						WHERE rs_epiid=cect_epiid
+							and cect_ctypeid =  25030 -- BP3
+					)
+					  or (rs_lmid = 25300 and rs_lrlid <> -1)
+					) 
+	insert into  dbo.risk_score_log
+		(rsl_epiid,rsl_ceo_cevid,rsl_astrsn,rsl_lmid,rsl_lrlid,care_type,rsl_rsntid--,additional_note_text
+		,rsl_agency_id)
+			select rs_epiid,rs_ceo_cevid,rs_astrsn,rs_lmid,rs_lrlid ,null as care_type, lrsnt_id,
+			@Param2  as rsl_agency_id
+			from .dbo.risk_score 
+			 join bp3_epi 
+				on bp3_epiid = rs_epiid 
+				   and bp3_ceo_cevid = rs_ceo_cevid
+			 join #medicare_epiid
+			       on m_epiid = rs_epiid
+			 join [dbo].[lu_risk_level]
+						   on lrl_id = rs_lrlid
+						left join [dbo].[lu_risk_score_note_type]
+						   on rs_lmid = lrsnt_lmid
+			where rs_lmid = 25200
+			union
+			select rs_epiid,rs_ceo_cevid,rs_astrsn,rs_lmid,rs_lrlid ,
+						  null as care_type,
+						   lrsnt_id,
+						 /*  case 
+							  when rs_lmid = 25100 then (lrsnt_note_type_desc +': '+ risk_level_desc) -- +' Guidance:'+ ltrim(str(lrl_rn_visit_number)) + ' Nuring Visits')
+							  when rs_lmid = 25200 then (lrsnt_note_type_desc +': '+ risk_level_desc)
+						end as note,
+						*/
+						@Param2  as rsl_agency_id
+					  from  dbo.[risk_score] 
+						join [dbo].[lu_risk_level]
+						   on lrl_id = rs_lrlid
+						--join #medicare_epiid
+			             --  on m_epiid = rs_epiid
+						left join [dbo].[lu_risk_score_note_type]
+						   on rs_lmid = lrsnt_lmid
+					  WHERE rs_lrlid <> -1
+							and rs_lmid = 25100
+			union
+			select rs_epiid,rs_ceo_cevid,rs_astrsn,rs_lmid,rs_lrlid ,
+						   case
+							  when rs_lmid = 25300 then 25030
+						   end as care_type,
+						   lrsnt_id,
+						 /*  case 
+							  when rs_lmid = 25100 then (lrsnt_note_type_desc +': '+ risk_level_desc) -- +' Guidance:'+ ltrim(str(lrl_rn_visit_number)) + ' Nuring Visits')
+							  when rs_lmid = 25200 then (lrsnt_note_type_desc +': '+ risk_level_desc)
+						end as note,
+						*/
+						@Param2  as rsl_agency_id
+					  from  dbo.[risk_score] 
+						join [dbo].[lu_risk_level]
+						   on lrl_id = rs_lrlid
+						join #medicare_epiid
+			               on m_epiid = rs_epiid
+						left join [dbo].[lu_risk_score_note_type]
+						   on rs_lmid = lrsnt_lmid
+					  WHERE rs_lrlid <> -1
+							and rs_lmid = 25300
+
+
+      --evacuation zone
+	 insert into  dbo.risk_score_log
+	    (rsl_epiid,rsl_ceslid, rsl_lmid,rsl_lrlid,rsl_rsntid,rsl_agency_id)
+	     select s.ez_epiid,s.ez_ceslid,s.ez_lmid,s.ez_lrlid,lrsnt_id, @Param2  as rsl_agency_id
+		 from #evacuation_zone e 
+		   join stg.evacuation_zone s
+		        on e.ez_epiid = s.ez_epiid and e.ez_ceslid = s.ez_ceslid
+		   left join  [dbo].[lu_risk_score_note_type]
+                on ez_lmid = lrsnt_lmid
+		  where ez_lrlid is not null
+     
+     
+
+	 ---history table arcive 
+	/*
+			  insert into [dbo].[risk_score_history]
+			     ([rsh_epiid],rsh_ceo_cevid,rsh_astrsn,rsh_lmid,rsh_pred_val,rsh_lrlid,care_type,rsh_rsntid,rsh_agency_id)
+			select rs_epiid, rs_ceo_cevid,rs_astrsn,rs_lmid,rs_pred_val, rs_lrlid ,null as care_type, lrsnt_id,
+			@Param2  as rsl_agency_id
+			from dbo.risk_score 
+			 join [dbo].[lu_risk_level]
+						   on lrl_id = rs_lrlid
+						left join [dbo].[lu_risk_score_note_type]
+						   on rs_lmid = lrsnt_lmid
+			where rs_lmid = 25200
+			union
+			select rs_epiid,rs_ceo_cevid,rs_astrsn,rs_lmid,rs_pred_val,rs_lrlid ,
+						   case
+							  when rs_lmid = 25300 then 25030
+						   end as care_type,
+						   lrsnt_id,
+						 /*  case 
+							  when rs_lmid = 25100 then (lrsnt_note_type_desc +': '+ risk_level_desc) -- +' Guidance:'+ ltrim(str(lrl_rn_visit_number)) + ' Nuring Visits')
+							  when rs_lmid = 25200 then (lrsnt_note_type_desc +': '+ risk_level_desc)
+						end as note,
+						*/
+						@Param2  as rsl_agency_id
+					  from  dbo.[risk_score] 
+						join [dbo].[lu_risk_level]
+						   on lrl_id = rs_lrlid
+						left join [dbo].[lu_risk_score_note_type]
+						   on rs_lmid = lrsnt_lmid
+					  WHERE rs_lrlid <> -1
+							and rs_lmid in (25100,25300)
+		
+
+  	 --    insert into [dbo].[risk_score_history]
+	--		   ([rsh_epiid],rsh_ceslid,rsh_lmid,rsh_lrlid,rsh_rsntid,rsh_agency_id)
+	----			 select rsl_epiid,rsl_ceslid,rsl_lmid,rsl_lrlid,rsl_rsntid,@Param2  as rsl_agency_id
+	--			 from dbo.risk_score_log
+	--			 where rsl_lmid = 25400
+	*/
+         
+
+	    merge into risk_score_history tgt
+		using (select  rs_epiid, rs_ceo_cevid,rs_astrsn,rs_lmid,rs_pred_val, rs_lrlid , care_type, rsl_agency_id, additional_note_text,rsl_rsntid
+				,rs.upd_ts,rs.crt_id,rs.crt_ts,rs.upd_id
+			   from dbo.risk_score rs left join dbo.risk_score_log rsl on rs_epiid = rsl_epiid and rs_ceo_cevid = rsl_ceo_cevid and rs_lmid = rsl_lmid) src
+		on( tgt.rsh_epiid = src.rs_epiid and
+			tgt.rsh_ceo_cevid = src.rs_ceo_cevid and
+			tgt.rsh_astrsn = src.rs_astrsn and
+			tgt.rsh_lmid  = src.rs_lmid  and
+			tgt.rsh_lrlid = src.rs_lrlid and
+			tgt.rsh_pred_val = src.rs_pred_val
+            )
+		when not matched then 
+		 insert (rsh_epiid
+				,rsh_ceo_cevid
+				,rsh_astrsn
+				 ,rsh_lmid 
+				 ,rsh_pred_val
+				 ,rsh_lrlid 
+				 ,care_type
+				 ,rsh_agency_id
+				 ,rsh_additional_note_text
+				 ,rsh_rsntid
+				 ,upd_ts
+				 ,crt_id
+				 ,crt_ts
+				 ,upd_id)
+		 values( src.rs_epiid, src.rs_ceo_cevid,src.rs_astrsn,
+				 src.rs_lmid,src.rs_pred_val, src.rs_lrlid , 
+				 src.care_type, src.rsl_agency_id, 
+				 src.additional_note_text,rsl_rsntid
+				,src.upd_ts,src.crt_id,src.crt_ts,src.upd_id)
+				;
+
+	   	    merge into dbo.[risk_score_history] tgt
+	     	using (select ez_epiid,ez_ceslid,ez_lmid, ez_lrlid,lrsnt_id,rsl_agency_id
+		               ,rsl.upd_ts,rsl.upd_id,rsl.crt_ts,rsl.crt_id
+		        from stg.evacuation_zone 
+				    left join dbo.risk_score_log rsl
+					   on ez_epiid = rsl_epiid and ez_ceslid = rsl_ceslid and ez_lmid = rsl_lmid
+		        	left join  [dbo].[lu_risk_score_note_type]
+                       on ez_lmid = lrsnt_lmid) src
+	    	on (tgt.rsh_epiid = src.ez_epiid and 
+		        tgt.rsh_ceslid = src.ez_ceslid and
+		    	tgt.rsh_lmid = src.ez_lmid and
+			    tgt.rsh_lrlid = src.ez_lrlid)
+		    when not matched then 
+		      insert (rsh_epiid,rsh_ceslid,rsh_lmid,rsh_lrlid,rsh_agency_id, rsh_rsntid,upd_ts,upd_id,crt_ts,crt_id)
+			  values (ez_epiid ,ez_ceslid,ez_lmid ,ez_lrlid,rsl_agency_id,lrsnt_id,upd_ts,upd_id,crt_ts,crt_id);
+        
+		
+
+		    ;with flag (frsh_id,frsh_epiid,frsh_ceo_cevid,frsh_astrsn,frsh_ceslid,frsh_lmid,crt_ts,fflag) as
+			(
+			SELECT rsh_id,rsh_epiid,rsh_ceo_cevid,rsh_astrsn,rsh_ceslid,rsh_lmid,crt_ts
+				   ,rank()over (partition by rsh_epiid,rsh_ceo_cevid,rsh_astrsn,rsh_ceslid,rsh_lmid
+						  order by crt_ts desc) as flag
+						 FROM [risk_score_history] 
+						 )
+		merge into  [risk_score_history] tgt
+		using (select frsh_id,frsh_epiid,frsh_ceo_cevid,frsh_astrsn,frsh_ceslid,frsh_lmid,fflag ,crt_ts
+			   from  flag ) src
+		on (frsh_id = rsh_id and frsh_epiid = rsh_epiid )
+		when matched then 
+		 update set tgt.flag = src.fflag;
+		 
+			
+
+			
+								
+
+	SELECT @iErrorCode=@@ERROR	 
+END
+GO
+
+
